@@ -1,96 +1,140 @@
+
 import axios from 'axios';
 import type { GenerationStatus } from '@/types';
+import type { ComfyUISettings } from '@/components/SettingsPanel';
 
 export class ComfyUIClient {
-  private baseUrl: string;
-  private wsUrl: string;
+  private settings: ComfyUISettings;
   private clientId: string;
   private ws: WebSocket | null = null;
   private currentPromptId: string | null = null;
   private headers: Record<string, string>;
+  private reconnectAttempts: number = 0;
+  private maxReconnectAttempts: number = 5;
+  private reconnectTimeout: number | null = null;
+  private isConnecting: boolean = false;
+  private isDisconnected: boolean = false;
   
   public onStatusChange?: (status: GenerationStatus) => void;
   public onImageGenerated?: (imageUrl: string) => void;
 
-  constructor(baseUrl: string) {
-    // Clean URLs by removing trailing slashes
-    this.baseUrl = baseUrl.replace(/\/+$/, '');
-    
-    // Derive wsUrl from baseUrl
-    let wsProtocol = 'ws://';
-    if (this.baseUrl.startsWith('https://')) {
-      wsProtocol = 'wss://';
-    }
-    this.wsUrl = this.baseUrl.replace(/^https?:\/\//, wsProtocol);
-    
-    // CRITICAL FIX: Ensure HTTP URLs are converted to HTTPS when not localhost
-    this.baseUrl = this.ensureProperProtocol(this.baseUrl, 'https');
-    this.wsUrl = this.ensureProperProtocol(this.wsUrl, 'wss');
-    
+  constructor(initialSettings?: ComfyUISettings) {
+    this.settings = initialSettings || this.getDefaultSettings();
     this.clientId = this.generateClientId();
+    this.updateHeaders();
     
-    // Set up headers with Cloudflare Access if credentials are provided
+    console.log('🔍 Base URL:', this.settings.baseUrl);
+    console.log('🔍 WebSocket URL:', this.settings.wsUrl);
+    console.log('🔍 Client ID:', this.clientId);
+    
+    // Connect with initial delay to prevent rapid connections
+    setTimeout(() => this.connectWebSocket(), 1000);
+  }
+
+  private getDefaultSettings(): ComfyUISettings {
+    return {
+      baseUrl: import.meta.env.VITE_COMFYUI_BASE_URL || 'http://localhost:8188',
+      wsUrl: import.meta.env.VITE_COMFYUI_WS_URL || 'ws://localhost:8188',
+      cfAccessClientId: import.meta.env.VITE_CF_ACCESS_CLIENT_ID || '',
+      cfAccessClientSecret: import.meta.env.VITE_CF_ACCESS_CLIENT_SECRET || '',
+      useCloudflareAccess: !!(import.meta.env.VITE_CF_ACCESS_CLIENT_ID && import.meta.env.VITE_CF_ACCESS_CLIENT_SECRET)
+    };
+  }
+
+  public updateSettings(newSettings: ComfyUISettings) {
+    const settingsChanged = JSON.stringify(this.settings) !== JSON.stringify(newSettings);
+    
+    if (settingsChanged) {
+      console.log('⚙️ Updating ComfyUI settings:', newSettings);
+      
+      // Disconnect existing connection
+      this.disconnect();
+      
+      // Update settings
+      this.settings = { ...newSettings };
+      this.updateHeaders();
+      
+      // Reset connection state
+      this.reconnectAttempts = 0;
+      this.isDisconnected = false;
+      this.isConnecting = false;
+      
+      // Reconnect with new settings
+      setTimeout(() => this.connectWebSocket(), 1000);
+    }
+  }
+
+  public getCurrentSettings(): ComfyUISettings {
+    return { ...this.settings };
+  }
+
+  private updateHeaders() {
     this.headers = {
       'Content-Type': 'application/json',
     };
     
-    const cfClientId = import.meta.env.VITE_CF_ACCESS_CLIENT_ID;
-    const cfClientSecret = import.meta.env.VITE_CF_ACCESS_CLIENT_SECRET;
-    
-    // Only add Cloudflare headers if not connecting to local development server
-    if (cfClientId && cfClientSecret && !this.isLocalDevelopment()) {
-      this.headers['CF-Access-Client-Id'] = cfClientId;
-      this.headers['CF-Access-Client-Secret'] = cfClientSecret;
+    // Add Cloudflare headers if enabled and not connecting to local development server
+    if (this.settings.useCloudflareAccess && 
+        this.settings.cfAccessClientId && 
+        this.settings.cfAccessClientSecret && 
+        !this.isLocalDevelopment()) {
+      this.headers['CF-Access-Client-Id'] = this.settings.cfAccessClientId;
+      this.headers['CF-Access-Client-Secret'] = this.settings.cfAccessClientSecret;
     }
-    
-    console.log('🔍 Base URL:', this.baseUrl);
-    console.log('🔍 WebSocket URL:', this.wsUrl);
-    console.log('🔍 Client ID:', this.clientId);
-    console.log('🔍 Is Local Development:', this.isLocalDevelopment());
-    
-    this.connectWebSocket();
   }
 
-  /**
-   * Ensures URLs use the proper protocol (HTTPS/WSS) for non-local connections
-   */
-  private ensureProperProtocol(url: string, secureProtocol: 'https' | 'wss'): string {
-    if (this.isLocalDevelopment(url)) {
-      return url; // Keep original protocol for local development
-    }
-    
-    // Convert HTTP to HTTPS, WS to WSS for remote connections
-    if (secureProtocol === 'https' && url.startsWith('http://')) {
-      return url.replace('http://', 'https://');
-    } else if (secureProtocol === 'wss' && url.startsWith('ws://')) {
-      return url.replace('ws://', 'wss://');
-    }
-    
-    return url;
-  }
-
-  private isLocalDevelopment(url?: string): boolean {
-    const checkUrl = url || this.baseUrl;
-    return checkUrl.includes('localhost') || 
-           checkUrl.includes('127.0.0.1') || 
-           checkUrl.includes('192.168.') || 
-           checkUrl.includes('10.0.') ||
-           checkUrl.includes('172.16.');
+  private isLocalDevelopment(): boolean {
+    return this.settings.baseUrl.includes('localhost') || 
+           this.settings.baseUrl.includes('127.0.0.1') || 
+           this.settings.baseUrl.includes('192.168.') || 
+           this.settings.baseUrl.includes('10.0.') ||
+           this.settings.baseUrl.includes('172.16.');
   }
 
   private generateClientId(): string {
     return Math.random().toString(36).substring(2, 15);
   }
 
+  // Helper function to normalize URL paths
+  private normalizeUrl(baseUrl: string, path: string): string {
+    // Remove trailing slash from base URL
+    const cleanBase = baseUrl.replace(/\/+$/, '');
+    // Remove leading slash from path
+    const cleanPath = path.replace(/^\/+/, '');
+    // Join with single slash
+    return `${cleanBase}/${cleanPath}`;
+  }
+
   private connectWebSocket() {
+    // Prevent multiple simultaneous connection attempts
+    if (this.isConnecting || this.isDisconnected) {
+      console.log('🚫 WebSocket connection attempt prevented (already connecting or disconnected)');
+      return;
+    }
+
+    // Prevent too many reconnection attempts
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      console.log('🚫 Max reconnection attempts reached');
+      this.onStatusChange?.({
+        type: 'error',
+        message: `Failed to connect to ComfyUI after ${this.maxReconnectAttempts} attempts. Please check your settings and server status.`
+      });
+      return;
+    }
+
+    this.isConnecting = true;
+
     try {
-      const wsUrl = `${this.wsUrl}/ws?clientId=${this.clientId}`;
-      console.log('🔗 Connecting to WebSocket:', wsUrl);
+      // Fix the double slash issue by using normalizeUrl
+      const wsUrl = this.normalizeUrl(this.settings.wsUrl, `ws?clientId=${this.clientId}`);
+      console.log('🔗 Connecting to WebSocket:', wsUrl, `(attempt ${this.reconnectAttempts + 1})`);
       
       this.ws = new WebSocket(wsUrl);
       
       this.ws.onopen = () => {
         console.log('✅ WebSocket connected successfully');
+        this.isConnecting = false;
+        this.reconnectAttempts = 0; // Reset attempts on successful connection
         this.onStatusChange?.({ type: 'connected', message: 'Connected to ComfyUI' });
       };
       
@@ -102,25 +146,53 @@ export class ComfyUIClient {
 
       this.ws.onerror = (error) => {
         console.error('❌ WebSocket error:', error);
+        this.isConnecting = false;
+        this.reconnectAttempts++;
+        
         this.onStatusChange?.({
           type: 'error',
-          message: `WebSocket connection failed. Make sure ComfyUI is running at ${this.baseUrl}`
+          message: `WebSocket connection failed (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts}). Check server settings and connectivity.`
         });
       };
 
       this.ws.onclose = (event) => {
         console.log('🔌 WebSocket closed:', event.code, event.reason);
-        if (event.code !== 1000) { // Not a normal closure
+        this.isConnecting = false;
+        
+        if (this.isDisconnected) {
+          console.log('🛑 WebSocket was intentionally disconnected');
+          return;
+        }
+        
+        if (event.code !== 1000 && this.reconnectAttempts < this.maxReconnectAttempts) {
+          // Not a normal closure and we haven't exceeded max attempts
           this.onStatusChange?.({
             type: 'error',
-            message: 'WebSocket connection lost. Attempting to reconnect...'
+            message: `Connection lost. Attempting to reconnect... (${this.reconnectAttempts + 1}/${this.maxReconnectAttempts})`
           });
-          // Attempt to reconnect after 3 seconds
-          setTimeout(() => this.connectWebSocket(), 3000);
+          
+          // Clear any existing timeout
+          if (this.reconnectTimeout) {
+            clearTimeout(this.reconnectTimeout);
+          }
+          
+          // Exponential backoff: 3s, 6s, 12s, 24s, 48s
+          const delay = Math.min(3000 * Math.pow(2, this.reconnectAttempts), 48000);
+          this.reconnectTimeout = window.setTimeout(() => {
+            this.connectWebSocket();
+          }, delay);
+        } else if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+          this.onStatusChange?.({
+            type: 'error',
+            message: 'Unable to maintain connection to ComfyUI. Please check your settings and server status.'
+          });
         }
       };
     } catch (error) {
       console.error('WebSocket connection error:', error);
+      this.isConnecting = false;
+      this.reconnectAttempts++;
+      
       this.onStatusChange?.({
         type: 'error',
         message: 'Failed to establish WebSocket connection'
@@ -165,25 +237,21 @@ export class ComfyUIClient {
     try {
       const uploadHeaders: Record<string, string> = {};
       
-      // Add Cloudflare Access headers if needed
-      if (!this.isLocalDevelopment()) {
-        const cfClientId = import.meta.env.VITE_CF_ACCESS_CLIENT_ID;
-        const cfClientSecret = import.meta.env.VITE_CF_ACCESS_CLIENT_SECRET;
-        
-        if (cfClientId && cfClientSecret) {
-          uploadHeaders['CF-Access-Client-Id'] = cfClientId;
-          uploadHeaders['CF-Access-Client-Secret'] = cfClientSecret;
-        }
+      // Add Cloudflare headers for upload if enabled
+      if (this.settings.useCloudflareAccess && 
+          this.settings.cfAccessClientId && 
+          this.settings.cfAccessClientSecret && 
+          !this.isLocalDevelopment()) {
+        uploadHeaders['CF-Access-Client-Id'] = this.settings.cfAccessClientId;
+        uploadHeaders['CF-Access-Client-Secret'] = this.settings.cfAccessClientSecret;
       }
 
-      const uploadUrl = `${this.baseUrl}/upload/image`;
+      const uploadUrl = this.normalizeUrl(this.settings.baseUrl, 'upload/image');
       console.log('📤 Uploading to:', uploadUrl);
 
       const response = await axios.post(uploadUrl, formData, {
         headers: uploadHeaders,
-        timeout: 30000, // 30 second timeout
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity,
+        timeout: 30000 // 30 second timeout
       });
 
       console.log('✅ Upload successful:', response.data);
@@ -195,32 +263,25 @@ export class ComfyUIClient {
         console.error('Response status:', error.response?.status);
         console.error('Response headers:', error.response?.headers);
         
-        // Handle specific error cases
-        if (error.code === 'ERR_NETWORK') {
-          this.onStatusChange?.({
-            type: 'error',
-            message: 'Network error. Check if ComfyUI is running and accessible.'
-          });
-        } else if (error.response?.status === 404) {
-          this.onStatusChange?.({
-            type: 'error',
-            message: 'Upload endpoint not found. Check ComfyUI configuration.'
-          });
-        } else if (error.response?.status === 413) {
-          this.onStatusChange?.({
-            type: 'error',
-            message: 'File too large. Try a smaller image.'
-          });
-        } else {
-          this.onStatusChange?.({
-            type: 'error',
-            message: `Upload failed: ${error.message}`
-          });
+        let errorMessage = 'Failed to upload image';
+        if (error.response?.status === 404) {
+          errorMessage = 'ComfyUI server not found. Check your server URL in settings.';
+        } else if (error.response?.status === 403) {
+          errorMessage = 'Upload forbidden. Check authentication credentials in settings.';
+        } else if (error.code === 'ECONNREFUSED') {
+          errorMessage = 'Cannot connect to ComfyUI server. Check your server URL in settings.';
+        } else if (error.code === 'TIMEOUT') {
+          errorMessage = 'Upload timed out. The file might be too large.';
         }
+        
+        this.onStatusChange?.({
+          type: 'error',
+          message: errorMessage
+        });
       } else {
         this.onStatusChange?.({
           type: 'error',
-          message: 'Failed to upload image. Check console for details.'
+          message: 'Unknown upload error occurred'
         });
       }
       throw new Error('Failed to upload image');
@@ -236,7 +297,7 @@ export class ComfyUIClient {
       // Log the workflow for debugging
       console.log('🔧 Generated workflow:', JSON.stringify(workflow, null, 2));
       
-      const promptUrl = `${this.baseUrl}/prompt`;
+      const promptUrl = this.normalizeUrl(this.settings.baseUrl, 'prompt');
       console.log('🎨 Sending prompt to:', promptUrl);
       
       const response = await axios.post(promptUrl, {
@@ -244,7 +305,7 @@ export class ComfyUIClient {
         client_id: this.clientId
       }, {
         headers: this.headers,
-        timeout: 30000, // 30 second timeout
+        timeout: 30000 // 30 second timeout
       });
 
       this.currentPromptId = response.data.prompt_id;
@@ -317,30 +378,41 @@ export class ComfyUIClient {
             message: errorMessage
           });
           return;
-        } else if (error.code === 'ERR_NETWORK') {
+        } else {
+          let errorMessage = 'Failed to generate image';
+          if (error.response?.status === 404) {
+            errorMessage = 'ComfyUI server not found. Check your server URL in settings.';
+          } else if (error.response?.status === 403) {
+            errorMessage = 'Generation forbidden. Check authentication credentials in settings.';
+          } else if (error.code === 'ECONNREFUSED') {
+            errorMessage = 'Cannot connect to ComfyUI server. Check your server URL in settings.';
+          } else if (error.code === 'TIMEOUT') {
+            errorMessage = 'Generation request timed out.';
+          }
+          
           this.onStatusChange?.({
             type: 'error',
-            message: 'Network error. Check if ComfyUI is running and accessible.'
+            message: errorMessage
           });
-          return;
         }
+      } else {
+        this.onStatusChange?.({
+          type: 'error',
+          message: 'Unknown generation error occurred'
+        });
       }
-      this.onStatusChange?.({
-        type: 'error',
-        message: 'Failed to generate image. Please check the console for details.'
-      });
       throw error;
     }
   }
 
   private async getGeneratedImage(): Promise<void> {
     try {
-      const historyUrl = `${this.baseUrl}/history/${this.currentPromptId}`;
+      const historyUrl = this.normalizeUrl(this.settings.baseUrl, `history/${this.currentPromptId}`);
       console.log('📜 Fetching history from:', historyUrl);
       
       const response = await axios.get(historyUrl, {
         headers: this.headers,
-        timeout: 30000,
+        timeout: 10000 // 10 second timeout
       });
       const history = response.data;
       
@@ -349,7 +421,7 @@ export class ComfyUIClient {
       const outputs = history[this.currentPromptId!]?.outputs;
       if (outputs && outputs["9"]?.images?.[0]) {
         const imageInfo = outputs["9"].images[0];
-        const imageUrl = `${this.baseUrl}/view?filename=${imageInfo.filename}&subfolder=${imageInfo.subfolder || ''}&type=${imageInfo.type}`;
+        const imageUrl = this.normalizeUrl(this.settings.baseUrl, `view?filename=${imageInfo.filename}&subfolder=${imageInfo.subfolder || ''}&type=${imageInfo.type}`);
         
         console.log('🖼️ Generated image URL:', imageUrl);
         
@@ -378,6 +450,91 @@ export class ComfyUIClient {
   private createWorkflow(prompt: string, imageName: string) {
     // Use the full DreamO workflow based on your working example
     return this.createDreamOWorkflow(prompt, imageName);
+  }
+
+  // Minimal workflow for testing - using GGUF loader
+  private createMinimalWorkflow(prompt: string) {
+    return {
+      "39": {
+        "inputs": {
+          "clip_name1": "t5xxl_fp16.safetensors",
+          "clip_name2": "clip_l.safetensors",
+          "type": "flux",
+          "device": "default"
+        },
+        "class_type": "DualCLIPLoader"
+      },
+      "40": {
+        "inputs": {
+          "vae_name": "ae.sft"
+        },
+        "class_type": "VAELoader"
+      },
+      "57": {
+        "inputs": {
+          "unet_name": "flux1-dev-Q8_0.gguf"
+        },
+        "class_type": "UnetLoaderGGUF"
+      },
+      "6": {
+        "inputs": {
+          "text": prompt,
+          "clip": ["39", 0]
+        },
+        "class_type": "CLIPTextEncode"
+      },
+      "33": {
+        "inputs": {
+          "text": "",
+          "clip": ["39", 0]
+        },
+        "class_type": "CLIPTextEncode"
+      },
+      "35": {
+        "inputs": {
+          "guidance": 3.5,
+          "conditioning": ["6", 0]
+        },
+        "class_type": "FluxGuidance"
+      },
+      "27": {
+        "inputs": {
+          "width": 1024,
+          "height": 1024,
+          "batch_size": 1
+        },
+        "class_type": "EmptySD3LatentImage"
+      },
+      "31": {
+        "inputs": {
+          "seed": Math.floor(Math.random() * 1000000000),
+          "steps": 12,
+          "cfg": 1,
+          "sampler_name": "euler",
+          "scheduler": "simple",
+          "denoise": 1,
+          "model": ["57", 0],
+          "positive": ["35", 0],
+          "negative": ["33", 0],
+          "latent_image": ["27", 0]
+        },
+        "class_type": "KSampler"
+      },
+      "8": {
+        "inputs": {
+          "samples": ["31", 0],
+          "vae": ["40", 0]
+        },
+        "class_type": "VAEDecode"
+      },
+      "9": {
+        "inputs": {
+          "filename_prefix": "ComfyUI",
+          "images": ["8", 0]
+        },
+        "class_type": "SaveImage"
+      }
+    };
   }
 
   // Full DreamO workflow based on your working example
@@ -548,43 +705,45 @@ export class ComfyUIClient {
       "50": {
         "inputs": {
           "model": ["45", 0],
-          "ref1": ["55", 0]
+          "ref1": imageName ? ["55", 0] : null
         },
         "class_type": "ApplyDreamO",
         "_meta": {
           "title": "Apply DreamO"
         }
       },
-      "52": {
-        "inputs": {
-          "image": imageName
+      ...(imageName ? {
+        "52": {
+          "inputs": {
+            "image": imageName
+          },
+          "class_type": "LoadImage",
+          "_meta": {
+            "title": "Load Image"
+          }
         },
-        "class_type": "LoadImage",
-        "_meta": {
-          "title": "Load Image"
-        }
-      },
-      "55": {
-        "inputs": {
-          "ref_task": "ip",
-          "pixels": ["52", 0],
-          "vae": ["40", 0],
-          "dreamo_processor": ["46", 0]
+        "55": {
+          "inputs": {
+            "ref_task": "ip",
+            "pixels": ["52", 0],
+            "vae": ["40", 0],
+            "dreamo_processor": ["46", 0]
+          },
+          "class_type": "DreamORefEncode",
+          "_meta": {
+            "title": "DreamO Ref Image Encode"
+          }
         },
-        "class_type": "DreamORefEncode",
-        "_meta": {
-          "title": "DreamO Ref Image Encode"
+        "56": {
+          "inputs": {
+            "images": ["55", 1]
+          },
+          "class_type": "PreviewImage",
+          "_meta": {
+            "title": "Preview Image"
+          }
         }
-      },
-      "56": {
-        "inputs": {
-          "images": ["55", 1]
-        },
-        "class_type": "PreviewImage",
-        "_meta": {
-          "title": "Preview Image"
-        }
-      },
+      } : {}),
       "57": {
         "inputs": {
           "unet_name": "flux1-dev-Q8_0.gguf"
@@ -597,9 +756,80 @@ export class ComfyUIClient {
     };
   }
 
+  // Debug method to check what's available on your ComfyUI instance
+  async debugComfyUISetup(): Promise<void> {
+    try {
+      console.log('🔍 Checking ComfyUI setup...');
+      console.log('📡 Current settings:', this.settings);
+      
+      // First, check if we can reach the server at all
+      try {
+        const healthUrl = this.normalizeUrl(this.settings.baseUrl, 'system_stats');
+        console.log('🏥 Checking server health:', healthUrl);
+        const healthResponse = await axios.get(healthUrl, { 
+          headers: this.headers,
+          timeout: 5000
+        });
+        console.log('✅ Server is reachable. System stats:', healthResponse.data);
+      } catch (healthError) {
+        console.error('❌ Cannot reach ComfyUI server:', healthError);
+        if (axios.isAxiosError(healthError)) {
+          if (healthError.code === 'ECONNREFUSED') {
+            console.error('🔥 Connection refused - ComfyUI is not running on the specified URL');
+          } else if (healthError.response?.status === 404) {
+            console.error('🔥 404 - The /system_stats endpoint is not available, but server might be running');
+          }
+        }
+      }
+      
+      // Check object info (available nodes)
+      try {
+        const objectInfoUrl = this.normalizeUrl(this.settings.baseUrl, 'object_info');
+        const objectInfoResponse = await axios.get(objectInfoUrl, { 
+          headers: this.headers,
+          timeout: 10000
+        });
+        console.log('📋 Available Node Types:', Object.keys(objectInfoResponse.data).sort());
+        
+        // Check for specific nodes we need
+        const requiredNodes = ['CheckpointLoaderSimple', 'CLIPTextEncode', 'KSampler', 'EmptyLatentImage', 'VAEDecode', 'SaveImage'];
+        const dreamONodes = ['DreamOProcessorLoader', 'ApplyDreamO', 'DreamORefEncode', 'FluxGuidance', 'UNETLoader', 'DualCLIPLoader'];
+        
+        console.log('✅ Basic Nodes Available:', requiredNodes.filter(node => node in objectInfoResponse.data));
+        console.log('🎨 DreamO Nodes Available:', dreamONodes.filter(node => node in objectInfoResponse.data));
+        console.log('❌ Missing Nodes:', [...requiredNodes, ...dreamONodes].filter(node => !(node in objectInfoResponse.data)));
+      } catch (err) {
+        console.error('❌ Failed to get object info:', err);
+      }
+      
+      // Check queue status
+      try {
+        const queueUrl = this.normalizeUrl(this.settings.baseUrl, 'queue');
+        const queueResponse = await axios.get(queueUrl, { 
+          headers: this.headers,
+          timeout: 5000
+        });
+        console.log('🎯 Queue Status:', queueResponse.data);
+      } catch (err) {
+        console.log('ℹ️ Could not fetch queue status (this is normal for some setups)');
+      }
+      
+    } catch (error) {
+      console.error('❌ Debug check failed:', error);
+    }
+  }
+
   disconnect() {
+    this.isDisconnected = true;
+    
+    // Clear reconnection timeout
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+    
     if (this.ws) {
-      this.ws.close();
+      this.ws.close(1000, 'Client disconnect'); // Normal closure
       this.ws = null;
     }
   }

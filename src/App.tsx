@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
-import { Zap, Sparkles, Bug } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Zap, Sparkles, Bug, Settings as SettingsIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { ImageUpload } from '@/components/ImageUpload';
 import { GenerationPanel } from '@/components/GenerationPanel';
+import { SettingsPanel, type ComfyUISettings } from '@/components/SettingsPanel';
 import { ComfyUIClient } from '@/lib/comfyui-client';
 import type { GenerationStatus } from '@/types';
 import { toast } from 'sonner';
@@ -11,45 +12,114 @@ import { Toaster } from '@/components/ui/sonner';
 import { ThemeProvider } from '@/components//ui/theme-provider';
 import './globals.css';
 
+// Local storage key for settings persistence
+const SETTINGS_STORAGE_KEY = 'comfyui-settings';
+
 function App() {
-  // Get the base URL from environment variables with fallback
-  const baseUrl = import.meta.env.VITE_COMFYUI_BASE_URL || 'http://localhost:8188';
-  
-  const [client] = useState(() => new ComfyUIClient(baseUrl));
+  // Use useRef to persist the client instance across re-renders
+  const clientRef = useRef<ComfyUIClient | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [prompt, setPrompt] = useState('a man playing guitar in the street');
   const [status, setStatus] = useState<GenerationStatus>({ type: 'idle' });
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [currentSettings, setCurrentSettings] = useState<ComfyUISettings>(() => {
+    // Load settings from localStorage or use defaults
+    try {
+      const saved = localStorage.getItem(SETTINGS_STORAGE_KEY);
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch (error) {
+      console.error('Failed to load settings from localStorage:', error);
+    }
+    
+    // Return default settings
+    return {
+      baseUrl: import.meta.env.VITE_COMFYUI_BASE_URL || 'http://localhost:8188',
+      wsUrl: import.meta.env.VITE_COMFYUI_WS_URL || 'ws://localhost:8188',
+      cfAccessClientId: import.meta.env.VITE_CF_ACCESS_CLIENT_ID || '',
+      cfAccessClientSecret: import.meta.env.VITE_CF_ACCESS_CLIENT_SECRET || '',
+      useCloudflareAccess: !!(import.meta.env.VITE_CF_ACCESS_CLIENT_ID && import.meta.env.VITE_CF_ACCESS_CLIENT_SECRET)
+    };
+  });
 
   useEffect(() => {
-    client.onStatusChange = (newStatus) => {
-      setStatus(newStatus);
+    // Only create client if it doesn't exist
+    if (!clientRef.current) {
+      console.log('🚀 Creating new ComfyUIClient instance');
+      clientRef.current = new ComfyUIClient(currentSettings);
       
-      if (newStatus.type === 'error' && newStatus.message) {
-        toast.error('Error', {
-          description: newStatus.message,
-        });
-      } else if (newStatus.type === 'completed' && newStatus.message) {
-        toast.success('Success', {
-          description: newStatus.message,
-        });
+      clientRef.current.onStatusChange = (newStatus) => {
+        setStatus(newStatus);
+        
+        if (newStatus.type === 'error' && newStatus.message) {
+          toast.error('Error', {
+            description: newStatus.message,
+          });
+        } else if (newStatus.type === 'completed' && newStatus.message) {
+          toast.success('Success', {
+            description: newStatus.message,
+          });
+        } else if (newStatus.type === 'connected') {
+          toast.success('Connected', {
+            description: 'Successfully connected to ComfyUI',
+          });
+        }
+      };
+
+      clientRef.current.onImageGenerated = (imageUrl) => {
+        setGeneratedImage(imageUrl);
+      };
+    }
+
+    // Cleanup function
+    return () => {
+      if (clientRef.current) {
+        console.log('🧹 Cleaning up ComfyUIClient instance');
+        clientRef.current.disconnect();
       }
     };
+  }, []); // Empty dependency array ensures this only runs once
 
-    client.onImageGenerated = (imageUrl) => {
-      setGeneratedImage(imageUrl);
-    };
-
-    return () => {
-      client.disconnect();
-    };
-  }, [client]);
+  const handleSettingsChange = (newSettings: ComfyUISettings) => {
+    console.log('⚙️ Settings changed:', newSettings);
+    
+    // Save to localStorage
+    try {
+      localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(newSettings));
+    } catch (error) {
+      console.error('Failed to save settings to localStorage:', error);
+    }
+    
+    // Update current settings
+    setCurrentSettings(newSettings);
+    
+    // Update client with new settings
+    if (clientRef.current) {
+      clientRef.current.updateSettings(newSettings);
+    }
+    
+    // Close settings panel
+    setIsSettingsOpen(false);
+    
+    toast.success('Settings Updated', {
+      description: 'Connection will be re-established with new settings',
+    });
+  };
 
   const handleImageSelect = (file: File) => {
     setSelectedFile(file);
   };
 
   const handleGenerate = async () => {
+    if (!clientRef.current) {
+      toast.error('Connection Error', {
+        description: 'ComfyUI client not initialized',
+      });
+      return;
+    }
+
     if (!selectedFile) {
       toast.error('Missing Image', {
         description: 'Please upload an image first',
@@ -65,22 +135,36 @@ function App() {
     }
 
     try {
-      const imageName = await client.uploadImage(selectedFile);
-      await client.generateImage(prompt, imageName);
+      const imageName = await clientRef.current.uploadImage(selectedFile);
+      await clientRef.current.generateImage(prompt, imageName);
     } catch (error) {
       console.error('Generation failed:', error);
+      // Error handling is done in the client's onStatusChange callback
     }
   };
 
   const handleDebug = async () => {
+    if (!clientRef.current) {
+      toast.error('Connection Error', {
+        description: 'ComfyUI client not initialized',
+      });
+      return;
+    }
+
     toast.info('Debug Check', {
       description: 'Checking ComfyUI setup - see console for details',
     });
-    // Add the debug method back to the client if needed
-    console.log('Debug functionality would go here');
+    await clientRef.current.debugComfyUISetup();
   };
 
   const handleTestSimpleGeneration = async () => {
+    if (!clientRef.current) {
+      toast.error('Connection Error', {
+        description: 'ComfyUI client not initialized',
+      });
+      return;
+    }
+
     if (!prompt.trim()) {
       toast.error('Missing Prompt', {
         description: 'Please enter a text prompt',
@@ -89,10 +173,11 @@ function App() {
     }
 
     try {
-      // Test without uploading an image first
-      await client.generateImage(prompt, '');
+      // Test without uploading an image first (empty string for imageName)
+      await clientRef.current.generateImage(prompt, '');
     } catch (error) {
       console.error('Simple generation failed:', error);
+      // Error handling is done in the client's onStatusChange callback
     }
   };
 
@@ -106,6 +191,23 @@ function App() {
   };
 
   const isLoading = status.type === 'uploading' || status.type === 'generating';
+  const isConnected = status.type === 'connected' || status.type === 'completed' || status.type === 'generating' || status.type === 'uploading';
+
+  const getConnectionStatus = (): 'connected' | 'connecting' | 'disconnected' | 'error' => {
+    switch (status.type) {
+      case 'connected':
+      case 'completed':
+      case 'generating':
+      case 'uploading':
+        return 'connected';
+      case 'error':
+        return 'error';
+      case 'idle':
+        return 'connecting';
+      default:
+        return 'disconnected';
+    }
+  };
 
   return (
     <ThemeProvider defaultTheme="dark" storageKey="comfyui-theme">
@@ -113,12 +215,41 @@ function App() {
       <div className="container mx-auto px-4 py-8">
         {/* Header */}
         <div className="text-center mb-12 animate-fade-in">
-          <h1 className="text-5xl font-bold text-white mb-4">
-            Craft
-          </h1>
+          <div className="flex justify-center items-start mb-4 relative">
+            <h1 className="text-5xl font-bold text-white">
+              Craft
+            </h1>
+            
+            {/* Settings Button */}
+            <Button
+              onClick={() => setIsSettingsOpen(true)}
+              variant="secondary"
+              size="sm"
+              className="ml-4 mt-2 bg-white/10 hover:bg-white/20 text-white border-white/20"
+            >
+              <SettingsIcon className="w-4 h-4" />
+            </Button>
+          </div>
+          
           <p className="text-xl text-white/80 max-w-2xl mx-auto">
             Transform your images with AI-powered creativity. Upload an image, describe your vision, and watch the magic happen.
           </p>
+          
+          {/* Connection Status Indicator */}
+          <div className="mt-4">
+            <div className={`inline-flex items-center px-3 py-1 rounded-full text-sm ${
+              isConnected 
+                ? 'bg-green-500/20 text-green-300 border border-green-500/30' 
+                : status.type === 'error'
+                ? 'bg-red-500/20 text-red-300 border border-red-500/30'
+                : 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/30'
+            }`}>
+              <div className={`w-2 h-2 rounded-full mr-2 ${
+                isConnected ? 'bg-green-400' : status.type === 'error' ? 'bg-red-400' : 'bg-yellow-400'
+              }`} />
+              {isConnected ? `Connected to ${new URL(currentSettings.baseUrl).hostname}` : status.type === 'error' ? 'Connection Error' : 'Connecting...'}
+            </div>
+          </div>
         </div>
 
         <div className="grid lg:grid-cols-2 gap-8 max-w-7xl mx-auto">
@@ -128,36 +259,6 @@ function App() {
               <Sparkles className="w-6 h-6 mr-2 text-pink-400" />
               Create Your Vision
             </h2>
-
-            {/* Debug Section */}
-            <div className="mb-6 p-4 bg-white/5 rounded-xl border border-white/10">
-              <h3 className="text-white/90 font-medium mb-3 flex items-center">
-                <Bug className="w-4 h-4 mr-2" />
-                Debug Tools
-              </h3>
-              <div className="flex gap-2 flex-wrap">
-                <Button
-                  onClick={handleDebug}
-                  variant="secondary"
-                  size="sm"
-                  className="bg-white/10 hover:bg-white/20 text-white border-white/20"
-                >
-                  Check ComfyUI Setup
-                </Button>
-                <Button
-                  onClick={handleTestSimpleGeneration}
-                  disabled={isLoading}
-                  variant="secondary"
-                  size="sm"
-                  className="bg-white/10 hover:bg-white/20 text-white border-white/20"
-                >
-                  Test Simple Generation
-                </Button>
-              </div>
-              <p className="text-white/60 text-xs mt-2">
-                Use these tools to debug connection and model issues. Check browser console for detailed output.
-              </p>
-            </div>
 
             {/* Image Upload */}
             <ImageUpload onImageSelect={handleImageSelect} className="mb-6" />
@@ -180,13 +281,18 @@ function App() {
             {/* Generate Button */}
             <Button
               onClick={handleGenerate}
-              disabled={isLoading}
+              disabled={isLoading || !isConnected}
               className="w-full bg-gradient-to-r from-pink-500 to-violet-500 hover:from-pink-600 hover:to-violet-600 text-white font-bold py-4 px-6 rounded-xl transition-all duration-300 transform hover:scale-105 hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none h-auto"
             >
               {isLoading ? (
                 <span className="flex items-center justify-center">
                   <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
                   {status.type === 'uploading' ? 'Uploading...' : 'Generating...'}
+                </span>
+              ) : !isConnected ? (
+                <span className="flex items-center justify-center">
+                  <div className="animate-pulse rounded-full h-5 w-5 bg-white/50 mr-2"></div>
+                  Waiting for Connection...
                 </span>
               ) : (
                 <span className="flex items-center justify-center">
@@ -207,6 +313,16 @@ function App() {
           </div>
         </div>
       </div>
+      
+      {/* Settings Modal */}
+      <SettingsPanel
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        onSettingsChange={handleSettingsChange}
+        currentSettings={currentSettings}
+        connectionStatus={getConnectionStatus()}
+      />
+      
       <Toaster />
         </div>
     </ThemeProvider>

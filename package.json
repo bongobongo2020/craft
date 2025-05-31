@@ -55,7 +55,7 @@
     "wait-on": "^8.0.3"
   },
   "build": {
-    "appId": "com.comfyui.dreamo",
+    "appId": "com.craft.app",
     "productName": "Craft",
     "directories": {
       "output": "dist-electron"
