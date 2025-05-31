@@ -114,10 +114,7 @@ function App() {
         {/* Header */}
         <div className="text-center mb-12 animate-fade-in">
           <h1 className="text-5xl font-bold text-white mb-4">
-            ComfyUI{' '}
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-pink-400 to-yellow-400">
-              DreamO
-            </span>
+            Craft
           </h1>
           <p className="text-xl text-white/80 max-w-2xl mx-auto">
             Transform your images with AI-powered creativity. Upload an image, describe your vision, and watch the magic happen.

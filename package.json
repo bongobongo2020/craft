@@ -56,7 +56,7 @@
   },
   "build": {
     "appId": "com.comfyui.dreamo",
-    "productName": "ComfyUI DreamO",
+    "productName": "Craft",
     "directories": {
       "output": "dist-electron"
     },
@@ -103,10 +103,10 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "ComfyUI DreamO"
+      "shortcutName": "Craft"
     },
     "portable": {
-      "artifactName": "ComfyUI-DreamO-Portable.exe"
+      "artifactName": "Craft-Portable.exe"
     }
   }
 }
