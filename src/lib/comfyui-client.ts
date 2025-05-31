@@ -12,16 +12,19 @@ export class ComfyUIClient {
   public onStatusChange?: (status: GenerationStatus) => void;
   public onImageGenerated?: (imageUrl: string) => void;
 
-  constructor() {
-    // Get URLs from environment variables with fallbacks
-    const rawBaseUrl = import.meta.env.VITE_COMFYUI_BASE_URL || 'http://localhost:8188';
-    const rawWsUrl = import.meta.env.VITE_COMFYUI_WS_URL || 'ws://localhost:8188';
-    
+  constructor(baseUrl: string) {
     // Clean URLs by removing trailing slashes
-    this.baseUrl = rawBaseUrl.replace(/\/+$/, '');
-    this.wsUrl = rawWsUrl.replace(/\/+$/, '');
+    this.baseUrl = baseUrl.replace(/\/+$/, '');
+    
+    // Derive wsUrl from baseUrl
+    let wsProtocol = 'ws://';
+    if (this.baseUrl.startsWith('https://')) {
+      wsProtocol = 'wss://';
+    }
+    this.wsUrl = this.baseUrl.replace(/^https?:\/\//, wsProtocol);
     
     // CRITICAL FIX: Ensure HTTP URLs are converted to HTTPS when not localhost
+    // This logic might need adjustment if baseUrl is already processed for protocol
     this.baseUrl = this.ensureProperProtocol(this.baseUrl, 'https');
     this.wsUrl = this.ensureProperProtocol(this.wsUrl, 'wss');
     
@@ -680,47 +683,6 @@ export class ComfyUIClient {
     };
   }
 
-  // Debug method to check what's available on your ComfyUI instance
-  async debugComfyUISetup(): Promise<void> {
-    try {
-      console.log('🔍 Checking ComfyUI setup...');
-      
-      // Check object info (available nodes)
-      try {
-        const objectInfoUrl = `${this.baseUrl}/object_info`;
-        const objectInfoResponse = await axios.get(objectInfoUrl, { 
-          headers: this.headers,
-          timeout: 10000,
-        });
-        console.log('📋 Available Node Types:', Object.keys(objectInfoResponse.data).sort());
-        
-        // Check for specific nodes we need
-        const requiredNodes = ['CheckpointLoaderSimple', 'CLIPTextEncode', 'KSampler', 'EmptyLatentImage', 'VAEDecode', 'SaveImage'];
-        const dreamONodes = ['DreamOProcessorLoader', 'ApplyDreamO', 'DreamORefEncode', 'FluxGuidance', 'UNETLoader', 'DualCLIPLoader'];
-        
-        console.log('✅ Basic Nodes Available:', requiredNodes.filter(node => node in objectInfoResponse.data));
-        console.log('🎨 DreamO Nodes Available:', dreamONodes.filter(node => node in objectInfoResponse.data));
-        console.log('❌ Missing Nodes:', [...requiredNodes, ...dreamONodes].filter(node => !(node in objectInfoResponse.data)));
-      } catch (err) {
-        console.error('❌ Failed to get object info:', err);
-      }
-      
-      // Check basic connectivity
-      try {
-        const systemStatsUrl = `${this.baseUrl}/system_stats`;
-        const systemStatsResponse = await axios.get(systemStatsUrl, { 
-          headers: this.headers,
-          timeout: 10000,
-        });
-        console.log('📊 System Stats:', systemStatsResponse.data);
-      } catch (err) {
-        console.log('ℹ️ Could not fetch system stats');
-      }
-      
-    } catch (error) {
-      console.error('❌ Debug check failed:', error);
-    }
-  }
 
   disconnect() {
     if (this.ws) {

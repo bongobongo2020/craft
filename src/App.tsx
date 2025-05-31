@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Zap, Sparkles, Bug, Settings } from 'lucide-react';
+import { Zap, Sparkles, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { SettingsPanel } from '@/components/SettingsPanel';
@@ -94,38 +94,6 @@ function App() {
     }
   };
 
-  const handleDebug = async () => {
-    if (!client) {
-      toast.error('Client Error', { description: 'ComfyUI client not initialized.' });
-      return;
-    }
-    toast.info('Debug Check', {
-      description: 'Checking ComfyUI setup - see console for details',
-    });
-    await (client as any).debugComfyUISetup?.();
-  };
-
-  const handleTestSimpleGeneration = async () => {
-    if (!client) {
-      toast.error('Client Error', { description: 'ComfyUI client not initialized.' });
-      return;
-    }
-    if (!prompt.trim()) {
-      toast.error('Missing Prompt', {
-        description: 'Please enter a text prompt',
-      });
-      return;
-    }
-
-    try {
-      // Test without uploading an image first
-      await client.generateImage(prompt, ''); // Assuming imageName can be empty for this test
-    } catch (error) {
-      console.error('Simple generation failed:', error);
-      // Status will be updated by client.onStatusChange
-    }
-  };
-
   const handleDownload = () => {
     if (generatedImage) {
       const a = document.createElement('a');
@@ -170,36 +138,6 @@ function App() {
               <Sparkles className="w-6 h-6 mr-2 text-pink-400" />
               Create Your Vision
             </h2>
-
-            {/* Debug Section */}
-            <div className="mb-6 p-4 bg-white/5 rounded-xl border border-white/10">
-              <h3 className="text-white/90 font-medium mb-3 flex items-center">
-                <Bug className="w-4 h-4 mr-2" />
-                Debug Tools
-              </h3>
-              <div className="flex gap-2 flex-wrap">
-                <Button
-                  onClick={handleDebug}
-                  variant="secondary"
-                  size="sm"
-                  className="bg-white/10 hover:bg-white/20 text-white border-white/20"
-                >
-                  Check ComfyUI Setup
-                </Button>
-                <Button
-                  onClick={handleTestSimpleGeneration}
-                  disabled={isLoading}
-                  variant="secondary"
-                  size="sm"
-                  className="bg-white/10 hover:bg-white/20 text-white border-white/20"
-                >
-                  Test Simple Generation
-                </Button>
-              </div>
-              <p className="text-white/60 text-xs mt-2">
-                Use these tools to debug connection and model issues. Check browser console for detailed output.
-              </p>
-            </div>
 
             {/* Image Upload */}
             <ImageUpload onImageSelect={handleImageSelect} className="mb-6" />
