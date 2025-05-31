@@ -1,4 +1,3 @@
-
 import axios from 'axios';
 import type { GenerationStatus } from '@/types';
 
@@ -22,6 +21,10 @@ export class ComfyUIClient {
     this.baseUrl = rawBaseUrl.replace(/\/+$/, '');
     this.wsUrl = rawWsUrl.replace(/\/+$/, '');
     
+    // CRITICAL FIX: Ensure HTTP URLs are converted to HTTPS when not localhost
+    this.baseUrl = this.ensureProperProtocol(this.baseUrl, 'https');
+    this.wsUrl = this.ensureProperProtocol(this.wsUrl, 'wss');
+    
     this.clientId = this.generateClientId();
     
     // Set up headers with Cloudflare Access if credentials are provided
@@ -41,16 +44,36 @@ export class ComfyUIClient {
     console.log('🔍 Base URL:', this.baseUrl);
     console.log('🔍 WebSocket URL:', this.wsUrl);
     console.log('🔍 Client ID:', this.clientId);
+    console.log('🔍 Is Local Development:', this.isLocalDevelopment());
     
     this.connectWebSocket();
   }
 
-  private isLocalDevelopment(): boolean {
-    return this.baseUrl.includes('localhost') || 
-           this.baseUrl.includes('127.0.0.1') || 
-           this.baseUrl.includes('192.168.') || 
-           this.baseUrl.includes('10.0.') ||
-           this.baseUrl.includes('172.16.');
+  /**
+   * Ensures URLs use the proper protocol (HTTPS/WSS) for non-local connections
+   */
+  private ensureProperProtocol(url: string, secureProtocol: 'https' | 'wss'): string {
+    if (this.isLocalDevelopment(url)) {
+      return url; // Keep original protocol for local development
+    }
+    
+    // Convert HTTP to HTTPS, WS to WSS for remote connections
+    if (secureProtocol === 'https' && url.startsWith('http://')) {
+      return url.replace('http://', 'https://');
+    } else if (secureProtocol === 'wss' && url.startsWith('ws://')) {
+      return url.replace('ws://', 'wss://');
+    }
+    
+    return url;
+  }
+
+  private isLocalDevelopment(url?: string): boolean {
+    const checkUrl = url || this.baseUrl;
+    return checkUrl.includes('localhost') || 
+           checkUrl.includes('127.0.0.1') || 
+           checkUrl.includes('192.168.') || 
+           checkUrl.includes('10.0.') ||
+           checkUrl.includes('172.16.');
   }
 
   private generateClientId(): string {
@@ -140,6 +163,7 @@ export class ComfyUIClient {
     try {
       const uploadHeaders: Record<string, string> = {};
       
+      // Add Cloudflare Access headers if needed
       if (!this.isLocalDevelopment()) {
         const cfClientId = import.meta.env.VITE_CF_ACCESS_CLIENT_ID;
         const cfClientSecret = import.meta.env.VITE_CF_ACCESS_CLIENT_SECRET;
@@ -154,7 +178,10 @@ export class ComfyUIClient {
       console.log('📤 Uploading to:', uploadUrl);
 
       const response = await axios.post(uploadUrl, formData, {
-        headers: uploadHeaders
+        headers: uploadHeaders,
+        timeout: 30000, // 30 second timeout
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
       });
 
       console.log('✅ Upload successful:', response.data);
@@ -165,11 +192,35 @@ export class ComfyUIClient {
         console.error('Response data:', error.response?.data);
         console.error('Response status:', error.response?.status);
         console.error('Response headers:', error.response?.headers);
+        
+        // Handle specific error cases
+        if (error.code === 'ERR_NETWORK') {
+          this.onStatusChange?.({
+            type: 'error',
+            message: 'Network error. Check if ComfyUI is running and accessible.'
+          });
+        } else if (error.response?.status === 404) {
+          this.onStatusChange?.({
+            type: 'error',
+            message: 'Upload endpoint not found. Check ComfyUI configuration.'
+          });
+        } else if (error.response?.status === 413) {
+          this.onStatusChange?.({
+            type: 'error',
+            message: 'File too large. Try a smaller image.'
+          });
+        } else {
+          this.onStatusChange?.({
+            type: 'error',
+            message: `Upload failed: ${error.message}`
+          });
+        }
+      } else {
+        this.onStatusChange?.({
+          type: 'error',
+          message: 'Failed to upload image. Check console for details.'
+        });
       }
-      this.onStatusChange?.({
-        type: 'error',
-        message: 'Failed to upload image. Check console for details.'
-      });
       throw new Error('Failed to upload image');
     }
   }
@@ -190,7 +241,8 @@ export class ComfyUIClient {
         prompt: workflow,
         client_id: this.clientId
       }, {
-        headers: this.headers
+        headers: this.headers,
+        timeout: 30000, // 30 second timeout
       });
 
       this.currentPromptId = response.data.prompt_id;
@@ -263,6 +315,12 @@ export class ComfyUIClient {
             message: errorMessage
           });
           return;
+        } else if (error.code === 'ERR_NETWORK') {
+          this.onStatusChange?.({
+            type: 'error',
+            message: 'Network error. Check if ComfyUI is running and accessible.'
+          });
+          return;
         }
       }
       this.onStatusChange?.({
@@ -279,7 +337,8 @@ export class ComfyUIClient {
       console.log('📜 Fetching history from:', historyUrl);
       
       const response = await axios.get(historyUrl, {
-        headers: this.headers
+        headers: this.headers,
+        timeout: 30000,
       });
       const history = response.data;
       
@@ -320,7 +379,6 @@ export class ComfyUIClient {
   }
 
   // Minimal workflow for testing - using GGUF loader
-  /*
   private createMinimalWorkflow(prompt: string) {
     return {
       "39": {
@@ -404,7 +462,6 @@ export class ComfyUIClient {
       }
     };
   }
-  */
 
   // Full DreamO workflow based on your working example
   private createDreamOWorkflow(prompt: string, imageName: string) {
@@ -631,7 +688,10 @@ export class ComfyUIClient {
       // Check object info (available nodes)
       try {
         const objectInfoUrl = `${this.baseUrl}/object_info`;
-        const objectInfoResponse = await axios.get(objectInfoUrl, { headers: this.headers });
+        const objectInfoResponse = await axios.get(objectInfoUrl, { 
+          headers: this.headers,
+          timeout: 10000,
+        });
         console.log('📋 Available Node Types:', Object.keys(objectInfoResponse.data).sort());
         
         // Check for specific nodes we need
@@ -645,20 +705,16 @@ export class ComfyUIClient {
         console.error('❌ Failed to get object info:', err);
       }
       
-      // Check available models
+      // Check basic connectivity
       try {
-        const checkpointsUrl = `${this.baseUrl}/api/v1/models/checkpoints`;
-        const checkpointsResponse = await axios.get(checkpointsUrl, { headers: this.headers });
-        console.log('🎯 Available Checkpoints:', checkpointsResponse.data);
+        const systemStatsUrl = `${this.baseUrl}/system_stats`;
+        const systemStatsResponse = await axios.get(systemStatsUrl, { 
+          headers: this.headers,
+          timeout: 10000,
+        });
+        console.log('📊 System Stats:', systemStatsResponse.data);
       } catch (err) {
-        // Try alternative endpoint
-        try {
-          const systemStatsUrl = `${this.baseUrl}/system_stats`;
-          const systemStatsResponse = await axios.get(systemStatsUrl, { headers: this.headers });
-          console.log('📊 System Stats:', systemStatsResponse.data);
-        } catch (err2) {
-          console.log('ℹ️ Could not fetch model list (this is normal)');
-        }
+        console.log('ℹ️ Could not fetch system stats');
       }
       
     } catch (error) {
