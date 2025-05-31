@@ -27,8 +27,8 @@ export class ComfyUIClient {
     console.log('🔍 WebSocket URL:', this.settings.wsUrl);
     console.log('🔍 Client ID:', this.clientId);
     
-    // Connect with initial delay to prevent rapid connections
-    setTimeout(() => this.connectWebSocket(), 1000);
+    // Do not auto-connect on instantiation. Let App.tsx control connection.
+    // setTimeout(() => this.connectWebSocket(), 1000); 
   }
 
   private getDefaultSettings(): ComfyUISettings {
@@ -59,13 +59,28 @@ export class ComfyUIClient {
       this.isDisconnected = false;
       this.isConnecting = false;
       
-      // Reconnect with new settings
-      setTimeout(() => this.connectWebSocket(), 1000);
+      // Reconnect with new settings if it was previously connected or trying to connect
+      // For now, updateSettings will just set the new settings, and App.tsx will manage calling connect().
+      // setTimeout(() => this.connectWebSocket(), 1000); 
     }
   }
 
-  public getCurrentSettings(): ComfyUISettings {
+  public getSettings(): ComfyUISettings { // Renamed from getCurrentSettings
     return { ...this.settings };
+  }
+
+  public connect(): void {
+    if (this.settings.baseUrl) { // Only connect if a base URL is set
+      this.isDisconnected = false; // Reset intentional disconnect flag
+      this.connectWebSocket();
+    } else {
+      console.warn("Cannot connect: ComfyUI base URL is not set.");
+      this.onStatusChange?.({ type: 'error', message: 'ComfyUI server URL is not configured.' });
+    }
+  }
+
+  public isConnected(): boolean {
+    return this.ws?.readyState === WebSocket.OPEN && !this.isConnecting && !this.isDisconnected;
   }
 
   private updateHeaders() {

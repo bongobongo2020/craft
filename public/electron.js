@@ -1,6 +1,14 @@
-import { app, BrowserWindow, shell } from 'electron';
+import { app, BrowserWindow, shell, ipcMain } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import Store from 'electron-store';
+
+// Initialize electron-store
+const store = new Store({
+  defaults: {
+    comfyuiUrl: 'http://127.0.0.1:8188' // Default ComfyUI URL
+  }
+});
 
 // Get __dirname equivalent in ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -22,7 +30,8 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       webSecurity: false, // Needed for local ComfyUI connections
-      allowRunningInsecureContent: true // For HTTP connections to ComfyUI
+      allowRunningInsecureContent: true, // For HTTP connections to ComfyUI
+      preload: path.join(__dirname, 'preload.js') // Add preload script
     },
     icon: path.join(__dirname, 'icon.png'), // Optional: add an icon
     show: false // Don't show until ready
@@ -65,6 +74,30 @@ function createWindow() {
     }
   });
 }
+
+// IPC Handlers
+ipcMain.handle('get-comfyui-url', async () => {
+  return store.get('comfyuiUrl');
+});
+
+ipcMain.handle('set-comfyui-url', async (event, url) => {
+  try {
+    store.set('comfyuiUrl', url);
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to set ComfyUI URL:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('is-comfyui-url-set', async () => {
+  const url = store.get('comfyuiUrl');
+  // Consider it "set" if it's not the default or if the user has explicitly saved it.
+  // For simplicity now, we'll just check if it exists and is not empty.
+  // A more robust check might involve a flag that's set after first user confirmation.
+  return !!url; 
+});
+
 
 // This method will be called when Electron has finished initialization
 app.whenReady().then(() => {

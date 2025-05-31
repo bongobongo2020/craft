@@ -25,6 +25,7 @@
     "axios": "^1.9.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "electron-store": "^10.0.1",
     "lucide-react": "^0.511.0",
     "next-themes": "^0.4.6",
     "react": "^19.1.0",
@@ -75,11 +76,15 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "public/icon.ico",
@@ -89,11 +94,15 @@
       "target": [
         {
           "target": "AppImage",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "deb",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "public/icon.png"
