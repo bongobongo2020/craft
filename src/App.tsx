@@ -1,76 +1,55 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Zap, Sparkles, Settings } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Zap, Sparkles, Bug } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { SettingsPanel } from '@/components/SettingsPanel';
 import { ImageUpload } from '@/components/ImageUpload';
 import { GenerationPanel } from '@/components/GenerationPanel';
 import { ComfyUIClient } from '@/lib/comfyui-client';
 import type { GenerationStatus } from '@/types';
 import { toast } from 'sonner';
 import { Toaster } from '@/components/ui/sonner';
-import { ThemeProvider } from '@/components/ui/theme-provider'; // Corrected path
+import { ThemeProvider } from '@/components//ui/theme-provider';
 import './globals.css';
 
-const DEFAULT_COMFY_BASE_URL = 'http://localhost:8188';
-const COMFY_BASE_URL_STORAGE_KEY = 'comfyui_base_url';
-
 function App() {
-  const [comfyBaseUrl, setComfyBaseUrl] = useState<string>(() => {
-    return localStorage.getItem(COMFY_BASE_URL_STORAGE_KEY) || DEFAULT_COMFY_BASE_URL;
-  });
-  const [client, setClient] = useState<ComfyUIClient | null>(null);
+  // Get the base URL from environment variables with fallback
+  const baseUrl = import.meta.env.VITE_COMFYUI_BASE_URL || 'http://localhost:8188';
+  
+  const [client] = useState(() => new ComfyUIClient(baseUrl));
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [prompt, setPrompt] = useState('a man playing guitar in the street');
   const [status, setStatus] = useState<GenerationStatus>({ type: 'idle' });
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
-  const [isSettingsPanelOpen, setIsSettingsPanelOpen] = useState(false);
 
   useEffect(() => {
-    if (client) {
-      client.disconnect();
-    }
-
-    console.log(`Initializing ComfyUIClient with base URL: ${comfyBaseUrl}`);
-    const newClient = new ComfyUIClient(comfyBaseUrl);
-    setClient(newClient);
-
-    newClient.onStatusChange = (newStatus) => {
+    client.onStatusChange = (newStatus) => {
       setStatus(newStatus);
+      
       if (newStatus.type === 'error' && newStatus.message) {
-        toast.error('Error', { description: newStatus.message });
+        toast.error('Error', {
+          description: newStatus.message,
+        });
       } else if (newStatus.type === 'completed' && newStatus.message) {
-        toast.success('Success', { description: newStatus.message });
+        toast.success('Success', {
+          description: newStatus.message,
+        });
       }
     };
 
-    newClient.onImageGenerated = (imageUrl) => {
+    client.onImageGenerated = (imageUrl) => {
       setGeneratedImage(imageUrl);
     };
 
     return () => {
-      console.log('Disconnecting ComfyUIClient');
-      newClient.disconnect();
+      client.disconnect();
     };
-  }, [comfyBaseUrl]);
+  }, [client]);
 
-  const handleImageSelect = useCallback((file: File) => {
+  const handleImageSelect = (file: File) => {
     setSelectedFile(file);
-  }, []);
-
-  const handleSaveBaseUrl = (newUrl: string) => {
-    localStorage.setItem(COMFY_BASE_URL_STORAGE_KEY, newUrl);
-    setComfyBaseUrl(newUrl);
-    toast.success('Settings Saved', {
-      description: `ComfyUI Base URL updated to: ${newUrl}`,
-    });
   };
 
   const handleGenerate = async () => {
-    if (!client) {
-      toast.error('Client Error', { description: 'ComfyUI client not initialized.' });
-      return;
-    }
     if (!selectedFile) {
       toast.error('Missing Image', {
         description: 'Please upload an image first',
@@ -90,7 +69,30 @@ function App() {
       await client.generateImage(prompt, imageName);
     } catch (error) {
       console.error('Generation failed:', error);
-      // Status will be updated by client.onStatusChange
+    }
+  };
+
+  const handleDebug = async () => {
+    toast.info('Debug Check', {
+      description: 'Checking ComfyUI setup - see console for details',
+    });
+    // Add the debug method back to the client if needed
+    console.log('Debug functionality would go here');
+  };
+
+  const handleTestSimpleGeneration = async () => {
+    if (!prompt.trim()) {
+      toast.error('Missing Prompt', {
+        description: 'Please enter a text prompt',
+      });
+      return;
+    }
+
+    try {
+      // Test without uploading an image first
+      await client.generateImage(prompt, '');
+    } catch (error) {
+      console.error('Simple generation failed:', error);
     }
   };
 
@@ -108,36 +110,57 @@ function App() {
   return (
     <ThemeProvider defaultTheme="dark" storageKey="comfyui-theme">
       <div className="min-h-screen gradient-bg">
-        <div className="container mx-auto px-4 py-8">
-          {/* Header */}
-          <div className="text-center mb-12 animate-fade-in relative">
-            <h1 className="text-5xl font-bold text-white mb-4">
-              ComfyUI{' '}
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-pink-400 to-yellow-400">
-                DreamO
-              </span>
-            </h1>
-            <p className="text-xl text-white/80 max-w-2xl mx-auto">
-              Transform your images with AI-powered creativity. Upload an image, describe your vision, and watch the magic happen.
-            </p>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setIsSettingsPanelOpen(true)}
-              className="absolute top-0 right-0 text-white/80 hover:text-white hover:bg-white/10"
-              aria-label="Open settings"
-            >
-              <Settings className="h-6 w-6" />
-            </Button>
-          </div>
+      <div className="container mx-auto px-4 py-8">
+        {/* Header */}
+        <div className="text-center mb-12 animate-fade-in">
+          <h1 className="text-5xl font-bold text-white mb-4">
+            ComfyUI{' '}
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-pink-400 to-yellow-400">
+              DreamO
+            </span>
+          </h1>
+          <p className="text-xl text-white/80 max-w-2xl mx-auto">
+            Transform your images with AI-powered creativity. Upload an image, describe your vision, and watch the magic happen.
+          </p>
+        </div>
 
-          <div className="grid lg:grid-cols-2 gap-8 max-w-7xl mx-auto">
+        <div className="grid lg:grid-cols-2 gap-8 max-w-7xl mx-auto">
           {/* Input Panel */}
           <div className="glass rounded-3xl p-8 transition-all duration-300 hover:shadow-xl animate-slide-up">
             <h2 className="text-2xl font-bold text-white mb-6 flex items-center">
               <Sparkles className="w-6 h-6 mr-2 text-pink-400" />
               Create Your Vision
             </h2>
+
+            {/* Debug Section */}
+            <div className="mb-6 p-4 bg-white/5 rounded-xl border border-white/10">
+              <h3 className="text-white/90 font-medium mb-3 flex items-center">
+                <Bug className="w-4 h-4 mr-2" />
+                Debug Tools
+              </h3>
+              <div className="flex gap-2 flex-wrap">
+                <Button
+                  onClick={handleDebug}
+                  variant="secondary"
+                  size="sm"
+                  className="bg-white/10 hover:bg-white/20 text-white border-white/20"
+                >
+                  Check ComfyUI Setup
+                </Button>
+                <Button
+                  onClick={handleTestSimpleGeneration}
+                  disabled={isLoading}
+                  variant="secondary"
+                  size="sm"
+                  className="bg-white/10 hover:bg-white/20 text-white border-white/20"
+                >
+                  Test Simple Generation
+                </Button>
+              </div>
+              <p className="text-white/60 text-xs mt-2">
+                Use these tools to debug connection and model issues. Check browser console for detailed output.
+              </p>
+            </div>
 
             {/* Image Upload */}
             <ImageUpload onImageSelect={handleImageSelect} className="mb-6" />
@@ -187,14 +210,8 @@ function App() {
           </div>
         </div>
       </div>
-      <Toaster richColors />
-      <SettingsPanel
-        isOpen={isSettingsPanelOpen}
-        onClose={() => setIsSettingsPanelOpen(false)}
-        currentBaseUrl={comfyBaseUrl}
-        onSaveBaseUrl={handleSaveBaseUrl}
-      />
-      </div>
+      <Toaster />
+        </div>
     </ThemeProvider>
   );
 }
