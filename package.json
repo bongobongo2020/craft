@@ -13,6 +13,8 @@
     "electron": "cross-env NODE_ENV=production electron .",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && cross-env NODE_ENV=development electron .\"",
     "electron:build": "npm run build && electron-builder",
+    "electron:build-win": "npm run build && electron-builder --win",
+    "electron:build-linux": "npm run build && electron-builder --linux",
     "electron:dist": "npm run build && electron-builder --publish=never",
     "pack": "npm run build && electron-builder --dir",
     "make": "npm run build && electron-builder"
