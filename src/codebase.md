@@ -49,8 +49,8 @@
 # App.tsx
 
 ```tsx
-import React, { useState, useEffect, useRef } from 'react';
-import { Zap, Sparkles, Bug, Settings as SettingsIcon } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Zap, Sparkles, Settings as SettingsIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { ImageUpload } from '@/components/ImageUpload';
@@ -141,6 +141,9 @@ function App() {
       localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(newSettings));
     } catch (error) {
       console.error('Failed to save settings to localStorage:', error);
+      toast.error('Storage Error', {
+        description: 'Could not save settings. Changes may not persist.',
+      });
     }
     
     // Update current settings
@@ -194,44 +197,6 @@ function App() {
     }
   };
 
-  const handleDebug = async () => {
-    if (!clientRef.current) {
-      toast.error('Connection Error', {
-        description: 'ComfyUI client not initialized',
-      });
-      return;
-    }
-
-    toast.info('Debug Check', {
-      description: 'Checking ComfyUI setup - see console for details',
-    });
-    await clientRef.current.debugComfyUISetup();
-  };
-
-  const handleTestSimpleGeneration = async () => {
-    if (!clientRef.current) {
-      toast.error('Connection Error', {
-        description: 'ComfyUI client not initialized',
-      });
-      return;
-    }
-
-    if (!prompt.trim()) {
-      toast.error('Missing Prompt', {
-        description: 'Please enter a text prompt',
-      });
-      return;
-    }
-
-    try {
-      // Test without uploading an image first (empty string for imageName)
-      await clientRef.current.generateImage(prompt, '');
-    } catch (error) {
-      console.error('Simple generation failed:', error);
-      // Error handling is done in the client's onStatusChange callback
-    }
-  };
-
   const handleDownload = () => {
     if (generatedImage) {
       const a = document.createElement('a');
@@ -268,10 +233,7 @@ function App() {
         <div className="text-center mb-12 animate-fade-in">
           <div className="flex justify-center items-start mb-4 relative">
             <h1 className="text-5xl font-bold text-white">
-              ComfyUI{' '}
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-pink-400 to-yellow-400">
-                DreamO
-              </span>
+              Craft
             </h1>
             
             {/* Settings Button */}
@@ -313,37 +275,6 @@ function App() {
               <Sparkles className="w-6 h-6 mr-2 text-pink-400" />
               Create Your Vision
             </h2>
-
-            {/* Debug Section */}
-            <div className="mb-6 p-4 bg-white/5 rounded-xl border border-white/10">
-              <h3 className="text-white/90 font-medium mb-3 flex items-center">
-                <Bug className="w-4 h-4 mr-2" />
-                Debug Tools
-              </h3>
-              <div className="flex gap-2 flex-wrap">
-                <Button
-                  onClick={handleDebug}
-                  disabled={!clientRef.current}
-                  variant="secondary"
-                  size="sm"
-                  className="bg-white/10 hover:bg-white/20 text-white border-white/20"
-                >
-                  Check ComfyUI Setup
-                </Button>
-                <Button
-                  onClick={handleTestSimpleGeneration}
-                  disabled={isLoading || !clientRef.current}
-                  variant="secondary"
-                  size="sm"
-                  className="bg-white/10 hover:bg-white/20 text-white border-white/20"
-                >
-                  Test Simple Generation
-                </Button>
-              </div>
-              <p className="text-white/60 text-xs mt-2">
-                Use these tools to debug connection and model issues. Check browser console for detailed output.
-              </p>
-            </div>
 
             {/* Image Upload */}
             <ImageUpload onImageSelect={handleImageSelect} className="mb-6" />
@@ -415,6 +346,7 @@ function App() {
 }
 
 export default App;
+
 ```
 
 # assets/react.svg
@@ -1523,6 +1455,7 @@ export const useTheme = () => {
 # lib/comfyui-client.ts
 
 ```ts
+
 import axios from 'axios';
 import type { GenerationStatus } from '@/types';
 import type { ComfyUISettings } from '@/components/SettingsPanel';
@@ -1532,7 +1465,7 @@ export class ComfyUIClient {
   private clientId: string;
   private ws: WebSocket | null = null;
   private currentPromptId: string | null = null;
-  private headers: Record<string, string>;
+  private headers: Record<string, string> = {};
   private reconnectAttempts: number = 0;
   private maxReconnectAttempts: number = 5;
   private reconnectTimeout: number | null = null;
@@ -1619,6 +1552,16 @@ export class ComfyUIClient {
     return Math.random().toString(36).substring(2, 15);
   }
 
+  // Helper function to normalize URL paths
+  private normalizeUrl(baseUrl: string, path: string): string {
+    // Remove trailing slash from base URL
+    const cleanBase = baseUrl.replace(/\/+$/, '');
+    // Remove leading slash from path
+    const cleanPath = path.replace(/^\/+/, '');
+    // Join with single slash
+    return `${cleanBase}/${cleanPath}`;
+  }
+
   private connectWebSocket() {
     // Prevent multiple simultaneous connection attempts
     if (this.isConnecting || this.isDisconnected) {
@@ -1639,7 +1582,8 @@ export class ComfyUIClient {
     this.isConnecting = true;
 
     try {
-      const wsUrl = `${this.settings.wsUrl}/ws?clientId=${this.clientId}`;
+      // Fix the double slash issue by using normalizeUrl
+      const wsUrl = this.normalizeUrl(this.settings.wsUrl, `ws?clientId=${this.clientId}`);
       console.log('🔗 Connecting to WebSocket:', wsUrl, `(attempt ${this.reconnectAttempts + 1})`);
       
       this.ws = new WebSocket(wsUrl);
@@ -1759,7 +1703,7 @@ export class ComfyUIClient {
         uploadHeaders['CF-Access-Client-Secret'] = this.settings.cfAccessClientSecret;
       }
 
-      const uploadUrl = `${this.settings.baseUrl}/upload/image`;
+      const uploadUrl = this.normalizeUrl(this.settings.baseUrl, 'upload/image');
       console.log('📤 Uploading to:', uploadUrl);
 
       const response = await axios.post(uploadUrl, formData, {
@@ -1810,7 +1754,7 @@ export class ComfyUIClient {
       // Log the workflow for debugging
       console.log('🔧 Generated workflow:', JSON.stringify(workflow, null, 2));
       
-      const promptUrl = `${this.settings.baseUrl}/prompt`;
+      const promptUrl = this.normalizeUrl(this.settings.baseUrl, 'prompt');
       console.log('🎨 Sending prompt to:', promptUrl);
       
       const response = await axios.post(promptUrl, {
@@ -1920,7 +1864,7 @@ export class ComfyUIClient {
 
   private async getGeneratedImage(): Promise<void> {
     try {
-      const historyUrl = `${this.settings.baseUrl}/history/${this.currentPromptId}`;
+      const historyUrl = this.normalizeUrl(this.settings.baseUrl, `history/${this.currentPromptId}`);
       console.log('📜 Fetching history from:', historyUrl);
       
       const response = await axios.get(historyUrl, {
@@ -1934,7 +1878,7 @@ export class ComfyUIClient {
       const outputs = history[this.currentPromptId!]?.outputs;
       if (outputs && outputs["9"]?.images?.[0]) {
         const imageInfo = outputs["9"].images[0];
-        const imageUrl = `${this.settings.baseUrl}/view?filename=${imageInfo.filename}&subfolder=${imageInfo.subfolder || ''}&type=${imageInfo.type}`;
+        const imageUrl = this.normalizeUrl(this.settings.baseUrl, `view?filename=${imageInfo.filename}&subfolder=${imageInfo.subfolder || ''}&type=${imageInfo.type}`);
         
         console.log('🖼️ Generated image URL:', imageUrl);
         
@@ -1963,91 +1907,6 @@ export class ComfyUIClient {
   private createWorkflow(prompt: string, imageName: string) {
     // Use the full DreamO workflow based on your working example
     return this.createDreamOWorkflow(prompt, imageName);
-  }
-
-  // Minimal workflow for testing - using GGUF loader
-  private createMinimalWorkflow(prompt: string) {
-    return {
-      "39": {
-        "inputs": {
-          "clip_name1": "t5xxl_fp16.safetensors",
-          "clip_name2": "clip_l.safetensors",
-          "type": "flux",
-          "device": "default"
-        },
-        "class_type": "DualCLIPLoader"
-      },
-      "40": {
-        "inputs": {
-          "vae_name": "ae.sft"
-        },
-        "class_type": "VAELoader"
-      },
-      "57": {
-        "inputs": {
-          "unet_name": "flux1-dev-Q8_0.gguf"
-        },
-        "class_type": "UnetLoaderGGUF"
-      },
-      "6": {
-        "inputs": {
-          "text": prompt,
-          "clip": ["39", 0]
-        },
-        "class_type": "CLIPTextEncode"
-      },
-      "33": {
-        "inputs": {
-          "text": "",
-          "clip": ["39", 0]
-        },
-        "class_type": "CLIPTextEncode"
-      },
-      "35": {
-        "inputs": {
-          "guidance": 3.5,
-          "conditioning": ["6", 0]
-        },
-        "class_type": "FluxGuidance"
-      },
-      "27": {
-        "inputs": {
-          "width": 1024,
-          "height": 1024,
-          "batch_size": 1
-        },
-        "class_type": "EmptySD3LatentImage"
-      },
-      "31": {
-        "inputs": {
-          "seed": Math.floor(Math.random() * 1000000000),
-          "steps": 12,
-          "cfg": 1,
-          "sampler_name": "euler",
-          "scheduler": "simple",
-          "denoise": 1,
-          "model": ["57", 0],
-          "positive": ["35", 0],
-          "negative": ["33", 0],
-          "latent_image": ["27", 0]
-        },
-        "class_type": "KSampler"
-      },
-      "8": {
-        "inputs": {
-          "samples": ["31", 0],
-          "vae": ["40", 0]
-        },
-        "class_type": "VAEDecode"
-      },
-      "9": {
-        "inputs": {
-          "filename_prefix": "ComfyUI",
-          "images": ["8", 0]
-        },
-        "class_type": "SaveImage"
-      }
-    };
   }
 
   // Full DreamO workflow based on your working example
@@ -2277,7 +2136,7 @@ export class ComfyUIClient {
       
       // First, check if we can reach the server at all
       try {
-        const healthUrl = `${this.settings.baseUrl}/system_stats`;
+        const healthUrl = this.normalizeUrl(this.settings.baseUrl, 'system_stats');
         console.log('🏥 Checking server health:', healthUrl);
         const healthResponse = await axios.get(healthUrl, { 
           headers: this.headers,
@@ -2297,7 +2156,7 @@ export class ComfyUIClient {
       
       // Check object info (available nodes)
       try {
-        const objectInfoUrl = `${this.settings.baseUrl}/object_info`;
+        const objectInfoUrl = this.normalizeUrl(this.settings.baseUrl, 'object_info');
         const objectInfoResponse = await axios.get(objectInfoUrl, { 
           headers: this.headers,
           timeout: 10000
@@ -2317,7 +2176,7 @@ export class ComfyUIClient {
       
       // Check queue status
       try {
-        const queueUrl = `${this.settings.baseUrl}/queue`;
+        const queueUrl = this.normalizeUrl(this.settings.baseUrl, 'queue');
         const queueResponse = await axios.get(queueUrl, { 
           headers: this.headers,
           timeout: 5000
@@ -2347,7 +2206,7 @@ export class ComfyUIClient {
     }
   }
 }
-        
+
 ```
 
 # lib/utils.ts

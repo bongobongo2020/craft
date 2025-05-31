@@ -8,7 +8,7 @@ export class ComfyUIClient {
   private clientId: string;
   private ws: WebSocket | null = null;
   private currentPromptId: string | null = null;
-  private headers: Record<string, string>;
+  private headers: Record<string, string> = {};
   private reconnectAttempts: number = 0;
   private maxReconnectAttempts: number = 5;
   private reconnectTimeout: number | null = null;
@@ -139,9 +139,22 @@ export class ComfyUIClient {
       };
       
       this.ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        console.log('📨 WebSocket message:', data);
-        this.handleWebSocketMessage(data);
+        try {
+          if (typeof event.data === 'string') {
+            const data = JSON.parse(event.data);
+            console.log('📨 WebSocket message:', data);
+            this.handleWebSocketMessage(data);
+          } else {
+            console.warn('📦 Received non-string WebSocket message:', event.data);
+          }
+        } catch (e) {
+          console.error('❌ Error parsing WebSocket message JSON:', e);
+          console.error('Raw WebSocket message data:', event.data);
+          this.onStatusChange?.({
+            type: 'error',
+            message: 'Received malformed data from ComfyUI server.'
+          });
+        }
       };
 
       this.ws.onerror = (error) => {
@@ -450,91 +463,6 @@ export class ComfyUIClient {
   private createWorkflow(prompt: string, imageName: string) {
     // Use the full DreamO workflow based on your working example
     return this.createDreamOWorkflow(prompt, imageName);
-  }
-
-  // Minimal workflow for testing - using GGUF loader
-  private createMinimalWorkflow(prompt: string) {
-    return {
-      "39": {
-        "inputs": {
-          "clip_name1": "t5xxl_fp16.safetensors",
-          "clip_name2": "clip_l.safetensors",
-          "type": "flux",
-          "device": "default"
-        },
-        "class_type": "DualCLIPLoader"
-      },
-      "40": {
-        "inputs": {
-          "vae_name": "ae.sft"
-        },
-        "class_type": "VAELoader"
-      },
-      "57": {
-        "inputs": {
-          "unet_name": "flux1-dev-Q8_0.gguf"
-        },
-        "class_type": "UnetLoaderGGUF"
-      },
-      "6": {
-        "inputs": {
-          "text": prompt,
-          "clip": ["39", 0]
-        },
-        "class_type": "CLIPTextEncode"
-      },
-      "33": {
-        "inputs": {
-          "text": "",
-          "clip": ["39", 0]
-        },
-        "class_type": "CLIPTextEncode"
-      },
-      "35": {
-        "inputs": {
-          "guidance": 3.5,
-          "conditioning": ["6", 0]
-        },
-        "class_type": "FluxGuidance"
-      },
-      "27": {
-        "inputs": {
-          "width": 1024,
-          "height": 1024,
-          "batch_size": 1
-        },
-        "class_type": "EmptySD3LatentImage"
-      },
-      "31": {
-        "inputs": {
-          "seed": Math.floor(Math.random() * 1000000000),
-          "steps": 12,
-          "cfg": 1,
-          "sampler_name": "euler",
-          "scheduler": "simple",
-          "denoise": 1,
-          "model": ["57", 0],
-          "positive": ["35", 0],
-          "negative": ["33", 0],
-          "latent_image": ["27", 0]
-        },
-        "class_type": "KSampler"
-      },
-      "8": {
-        "inputs": {
-          "samples": ["31", 0],
-          "vae": ["40", 0]
-        },
-        "class_type": "VAEDecode"
-      },
-      "9": {
-        "inputs": {
-          "filename_prefix": "ComfyUI",
-          "images": ["8", 0]
-        },
-        "class_type": "SaveImage"
-      }
-    };
   }
 
   // Full DreamO workflow based on your working example

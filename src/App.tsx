@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Zap, Sparkles, Bug, Settings as SettingsIcon } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Zap, Sparkles, Settings as SettingsIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { ImageUpload } from '@/components/ImageUpload';
@@ -90,6 +90,9 @@ function App() {
       localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(newSettings));
     } catch (error) {
       console.error('Failed to save settings to localStorage:', error);
+      toast.error('Storage Error', {
+        description: 'Could not save settings. Changes may not persist.',
+      });
     }
     
     // Update current settings
@@ -139,44 +142,6 @@ function App() {
       await clientRef.current.generateImage(prompt, imageName);
     } catch (error) {
       console.error('Generation failed:', error);
-      // Error handling is done in the client's onStatusChange callback
-    }
-  };
-
-  const handleDebug = async () => {
-    if (!clientRef.current) {
-      toast.error('Connection Error', {
-        description: 'ComfyUI client not initialized',
-      });
-      return;
-    }
-
-    toast.info('Debug Check', {
-      description: 'Checking ComfyUI setup - see console for details',
-    });
-    await clientRef.current.debugComfyUISetup();
-  };
-
-  const handleTestSimpleGeneration = async () => {
-    if (!clientRef.current) {
-      toast.error('Connection Error', {
-        description: 'ComfyUI client not initialized',
-      });
-      return;
-    }
-
-    if (!prompt.trim()) {
-      toast.error('Missing Prompt', {
-        description: 'Please enter a text prompt',
-      });
-      return;
-    }
-
-    try {
-      // Test without uploading an image first (empty string for imageName)
-      await clientRef.current.generateImage(prompt, '');
-    } catch (error) {
-      console.error('Simple generation failed:', error);
       // Error handling is done in the client's onStatusChange callback
     }
   };
